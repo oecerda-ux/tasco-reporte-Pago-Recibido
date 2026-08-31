@@ -1120,6 +1120,24 @@ function renderTablaCliente(resetPage){
     html += `<tr class="expandable" onclick="toggleClienteDetail(this,'${escapeAttr(c.cl)}')"><td class="chev">▶</td><td>${c.cl}</td><td>${c.proyectos}</td><td class="num">${c.n_unidades}</td><td class="num">${fmtUF(c.venta_uf,0)}</td><td class="num">${fmtUF(c.cobrado_uf,0)}</td><td class="num">${fmtUF(c.saldo_uf,0)}</td><td class="num">${pctBadge(c.pct)}</td></tr>`;
   });
   html += '</tbody>';
+
+  // Totales: sobre TODAS las filas que pasan el filtro/búsqueda actual (rows), no sólo la página visible.
+  const totUnidades = rows.reduce((s,c)=> s + (c.n_unidades||0), 0);
+  const totVenta = rows.reduce((s,c)=> s + (c.venta_uf||0), 0);
+  const totCobrado = rows.reduce((s,c)=> s + (c.cobrado_uf||0), 0);
+  const totSaldo = rows.reduce((s,c)=> s + (c.saldo_uf||0), 0);
+  const totPct = totVenta>0 ? (totCobrado/totVenta*100) : 0;
+  html += `<tfoot><tr style="font-weight:700;background:#f8f9fb;">
+    <td></td>
+    <td>TOTAL (${totalRows.toLocaleString('es-CL')} ${totalRows===1?'cliente':'clientes'})</td>
+    <td></td>
+    <td class="num">${totUnidades.toLocaleString('es-CL')}</td>
+    <td class="num">${fmtUF(totVenta,0)}</td>
+    <td class="num">${fmtUF(totCobrado,0)}</td>
+    <td class="num">${fmtUF(totSaldo,0)}</td>
+    <td class="num">${pctBadge(totPct)}</td>
+  </tr></tfoot>`;
+
   document.getElementById('tbl-cliente').innerHTML = html;
   document.getElementById('pag-cliente').innerHTML = pagControls(totalRows, cliPage, cliPageSize, 'cliente');
 }
