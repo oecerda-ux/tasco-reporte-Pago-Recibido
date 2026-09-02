@@ -188,7 +188,13 @@ table.mensual-drill td.lvl2{padding-left:44px;color:var(--text-secondary);}
   </div>
 
   <div class="chart-container" style="margin-bottom:var(--gap);">
-    <h3>Cumplimiento de Meta Mensual</h3>
+    <div class="chart-head-row">
+      <h3>Cumplimiento de Meta Mensual</h3>
+      <div class="fgroup" style="min-width:150px;">
+        <label>Mes</label>
+        <select id="meta-month-select"></select>
+      </div>
+    </div>
     <div class="chart-note" id="meta-kpi-label">—</div>
     <section class="kpi-row" id="meta-kpi-row" style="margin-bottom:0;">
       <div class="kpi-card"><div class="kpi-label">Meta del mes</div><div class="kpi-value" id="kpi-meta-meta">—</div><div class="kpi-sub">UF · Metas.xlsx</div></div>
@@ -607,18 +613,52 @@ function applyFilters(){
   renderControlMensual();
 }
 
-// ---------- Cumplimiento de Meta Mensual (Meta vs Real, mes de generación del reporte) ----------
-// El mes evaluado es siempre el mes calendario de generación del reporte (RAW.generated_at),
+// ---------- Cumplimiento de Meta Mensual (Meta vs Real, mes seleccionado) ----------
+// Por defecto el mes evaluado es el mes calendario de generación del reporte (RAW.generated_at),
 // no los chips de Año/Mes (esos filtran las tablas históricas; esto es "métricas globales del
-// mes actual"). Sí respeta el filtro de Proyecto: sin proyecto seleccionado muestra el total de
-// todos los proyectos con meta definida ese mes; con un proyecto seleccionado, muestra solo ese.
+// mes"). El selector "Mes" de esta sección permite elegir cualquier otro mes que exista en la
+// base de Metas.xlsx (hoja Metas o Proyeccion), para revisar cumplimiento de meses cerrados.
+// Sí respeta el filtro de Proyecto: sin proyecto seleccionado muestra el total de todos los
+// proyectos con meta definida ese mes; con un proyecto seleccionado, muestra solo ese.
 function getCurrentMonthKey(){
   const s = (RAW.generated_at || '').slice(0,7); // "YYYY-MM"
   return s || null;
 }
 
+// Meses disponibles para el selector: unión de los meses definidos en METAS/PROYECCIONES (para
+// cualquier proyecto) más el mes actual (aunque no tenga meta cargada aún, para que siempre
+// aparezca como opción por defecto). Orden descendente (más reciente primero).
+function getAvailableMetaMonths(){
+  const set = new Set();
+  Object.values(METAS).forEach(m=> Object.keys(m).forEach(k=>set.add(k)));
+  Object.values(PROYECCIONES).forEach(m=> Object.keys(m).forEach(k=>set.add(k)));
+  const cur = getCurrentMonthKey();
+  if(cur) set.add(cur);
+  return [...set].sort().reverse();
+}
+
+let metaMonthKey = getCurrentMonthKey();
+
+function monthKeyLabel(mk){
+  const [yStr, moStr] = mk.split('-');
+  const y = +yStr, mo = +moStr;
+  return `${MESES[mo]}-${String(y).slice(2)}`;
+}
+
+function initMetaMonthSelect(){
+  const sel = document.getElementById('meta-month-select');
+  const months = getAvailableMetaMonths();
+  sel.innerHTML = months.map(mk=> `<option value="${mk}">${monthKeyLabel(mk)}${mk===getCurrentMonthKey() ? ' (actual)' : ''}</option>`).join('');
+  sel.value = metaMonthKey;
+  sel.onchange = ()=>{
+    metaMonthKey = sel.value;
+    renderMetaKPIs();
+    renderCumplimientoChart();
+  };
+}
+
 function renderMetaKPIs(){
-  const mk = getCurrentMonthKey();
+  const mk = metaMonthKey;
   const labelEl = document.getElementById('meta-kpi-label');
   const setBlank = (msg)=>{
     labelEl.textContent = msg;
@@ -686,7 +726,7 @@ function renderMetaKPIs(){
 // ingresos aún) y también los que tienen ingresos Conciliado este mes pero no tienen meta
 // definida en Metas.xlsx. No respeta el filtro de Proyecto (es una vista comparativa completa).
 function renderCumplimientoChart(){
-  const mk = getCurrentMonthKey();
+  const mk = metaMonthKey;
   const noteEl = document.getElementById('cumplimiento-chart-note');
   const tbl = document.getElementById('tbl-cumplimiento');
   if(!mk){
@@ -1418,6 +1458,7 @@ function changePage(kind, delta){
 
 // ---------- Init ----------
 initCharts();
+initMetaMonthSelect();
 applyFilters();
 </script>
 </body>
