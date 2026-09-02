@@ -188,13 +188,7 @@ table.mensual-drill td.lvl2{padding-left:44px;color:var(--text-secondary);}
   </div>
 
   <div class="chart-container" style="margin-bottom:var(--gap);">
-    <div class="chart-head-row">
-      <h3>Cumplimiento de Meta Mensual</h3>
-      <div class="fgroup" style="min-width:150px;">
-        <label>Mes</label>
-        <select id="meta-month-select"></select>
-      </div>
-    </div>
+    <h3>Cumplimiento de Meta Mensual</h3>
     <div class="chart-note" id="meta-kpi-label">—</div>
     <section class="kpi-row" id="meta-kpi-row" style="margin-bottom:0;">
       <div class="kpi-card"><div class="kpi-label">Meta del mes</div><div class="kpi-value" id="kpi-meta-meta">—</div><div class="kpi-sub">UF · Metas.xlsx</div></div>
@@ -614,30 +608,16 @@ function applyFilters(){
 }
 
 // ---------- Cumplimiento de Meta Mensual (Meta vs Real, mes seleccionado) ----------
-// Por defecto el mes evaluado es el mes calendario de generación del reporte (RAW.generated_at),
-// no los chips de Año/Mes (esos filtran las tablas históricas; esto es "métricas globales del
-// mes"). El selector "Mes" de esta sección permite elegir cualquier otro mes que exista en la
-// base de Metas.xlsx (hoja Metas o Proyeccion), para revisar cumplimiento de meses cerrados.
-// Sí respeta el filtro de Proyecto: sin proyecto seleccionado muestra el total de todos los
-// proyectos con meta definida ese mes; con un proyecto seleccionado, muestra solo ese.
+// El período evaluado ahora sigue los chips Año/Mes de arriba (state.years / state.months) --
+// si se seleccionan varios meses (y/o varios años), se SUMAN las metas/real/EAT de todas esas
+// combinaciones año-mes. Los meses sin meta definida en Metas.xlsx se ignoran (no se consideran
+// ni suman). Sin selección de Año/Mes ("Todos"), se suman todos los meses que tengan meta
+// definida. Sí respeta el filtro de Proyecto: sin proyecto seleccionado muestra el total de todos
+// los proyectos con meta definida en el período; con un proyecto seleccionado, muestra solo ese.
 function getCurrentMonthKey(){
   const s = (RAW.generated_at || '').slice(0,7); // "YYYY-MM"
   return s || null;
 }
-
-// Meses disponibles para el selector: unión de los meses definidos en METAS/PROYECCIONES (para
-// cualquier proyecto) más el mes actual (aunque no tenga meta cargada aún, para que siempre
-// aparezca como opción por defecto). Orden descendente (más reciente primero).
-function getAvailableMetaMonths(){
-  const set = new Set();
-  Object.values(METAS).forEach(m=> Object.keys(m).forEach(k=>set.add(k)));
-  Object.values(PROYECCIONES).forEach(m=> Object.keys(m).forEach(k=>set.add(k)));
-  const cur = getCurrentMonthKey();
-  if(cur) set.add(cur);
-  return [...set].sort().reverse();
-}
-
-let metaMonthKey = getCurrentMonthKey();
 
 function monthKeyLabel(mk){
   const [yStr, moStr] = mk.split('-');
@@ -645,20 +625,36 @@ function monthKeyLabel(mk){
   return `${MESES[mo]}-${String(y).slice(2)}`;
 }
 
-function initMetaMonthSelect(){
-  const sel = document.getElementById('meta-month-select');
-  const months = getAvailableMetaMonths();
-  sel.innerHTML = months.map(mk=> `<option value="${mk}">${monthKeyLabel(mk)}${mk===getCurrentMonthKey() ? ' (actual)' : ''}</option>`).join('');
-  sel.value = metaMonthKey;
-  sel.onchange = ()=>{
-    metaMonthKey = sel.value;
-    renderMetaKPIs();
-    renderCumplimientoChart();
-  };
+// Universo de meses "YYYY-MM" que tienen meta definida para AL MENOS un proyecto en METAS.
+function getMetaMonthUniverse(){
+  const set = new Set();
+  Object.values(METAS).forEach(m=> Object.keys(m).forEach(k=>set.add(k)));
+  return set;
+}
+
+// Combina los chips Año/Mes seleccionados (cross-product) y los intersecta con el universo de
+// meses que sí tienen meta definida -- así "los meses sin meta no se consideran".
+function selectedMetaMonthKeys(){
+  const universe = getMetaMonthUniverse();
+  const years = state.years.size ? [...state.years] : [...new Set([...universe].map(k=>+k.slice(0,4)))];
+  const months = state.months.size ? [...state.months] : [1,2,3,4,5,6,7,8,9,10,11,12];
+  const keys = new Set();
+  years.forEach(y=>{
+    months.forEach(mo=>{
+      const k = `${y}-${String(mo).padStart(2,'0')}`;
+      if(universe.has(k)) keys.add(k);
+    });
+  });
+  return [...keys].sort();
+}
+
+function metaPeriodLabel(mesKeys){
+  if(mesKeys.length===1) return monthKeyLabel(mesKeys[0]);
+  return `${monthKeyLabel(mesKeys[0])} a ${monthKeyLabel(mesKeys[mesKeys.length-1])} (${mesKeys.length} meses)`;
 }
 
 function renderMetaKPIs(){
-  const mk = metaMonthKey;
+  const mesKeys = selectedMetaMonthKeys();
   const labelEl = document.getElementById('meta-kpi-label');
   const setBlank = (msg)=>{
     labelEl.textContent = msg;
@@ -668,46 +664,63 @@ function renderMetaKPIs(){
     document.getElementById('kpi-meta-pct-sub').textContent = '';
   };
 
-  if(!mk){ setBlank('Sin fecha de generación disponible.'); return; }
-  const [yStr, moStr] = mk.split('-');
-  const y = +yStr, mo = +moStr;
-  const mesLabel = `${MESES[mo]}-${String(y).slice(2)}`;
+  if(mesKeys.length===0){ setBlank('No hay metas definidas para el período seleccionado (Año/Mes) en Metas.xlsx.'); return; }
+  const mesKeySet = new Set(mesKeys);
 
-  const proyectosConMeta = Object.keys(METAS).filter(p => METAS[p] && METAS[p][mk] !== undefined);
+  const proyectosConMeta = Object.keys(METAS).filter(p => mesKeys.some(mk=> METAS[p] && METAS[p][mk] !== undefined));
   const scope = state.proyecto ? (proyectosConMeta.includes(state.proyecto) ? [state.proyecto] : []) : proyectosConMeta;
 
   if(scope.length===0){
     setBlank(state.proyecto
-      ? `${state.proyecto} no tiene meta definida para ${mesLabel} en Metas.xlsx.`
-      : `No hay metas definidas para ${mesLabel} en Metas.xlsx.`);
+      ? `${state.proyecto} no tiene meta definida para ${metaPeriodLabel(mesKeys)} en Metas.xlsx.`
+      : `No hay metas definidas para ${metaPeriodLabel(mesKeys)} en Metas.xlsx.`);
     return;
   }
 
-  const metaTotal = scope.reduce((s,p)=> s + (METAS[p][mk]||0), 0);
-  const realByP = {};
+  // Real por proyecto+mes, sólo dentro de los meses seleccionados.
+  const realByPM = {};
   TX.forEach(t=>{
-    if(t.es==='Conciliado' && t.y===y && t.mo===mo && scope.includes(t.p)){
-      realByP[t.p] = (realByP[t.p]||0) + (t.v||0);
-    }
+    if(t.es!=='Conciliado' || !scope.includes(t.p)) return;
+    const mk = `${t.y}-${String(t.mo).padStart(2,'0')}`;
+    if(!mesKeySet.has(mk)) return;
+    const key = t.p+'|'+mk;
+    realByPM[key] = (realByPM[key]||0) + (t.v||0);
   });
-  const realTotal = Object.values(realByP).reduce((s,v)=> s+v, 0);
-  // Proyección por proyecto = max(0, EAT objetivo fijo - Real de ese proyecto); nunca negativa.
-  const proyTotal = scope.reduce((s,p)=>{
-    const target = (PROYECCIONES[p] && PROYECCIONES[p][mk]) || 0;
-    const realP = realByP[p] || 0;
-    return s + Math.max(0, target - realP);
-  }, 0);
+
+  let metaTotal=0, realTotal=0, proyTotal=0;
+  scope.forEach(p=>{
+    mesKeys.forEach(mk=>{
+      metaTotal += (METAS[p] && METAS[p][mk]) || 0;
+      const realPM = realByPM[p+'|'+mk] || 0;
+      realTotal += realPM;
+      // Proyección = max(0, EAT objetivo fijo - Real de ese proyecto/mes); nunca negativa.
+      const target = (PROYECCIONES[p] && PROYECCIONES[p][mk]) || 0;
+      proyTotal += Math.max(0, target - realPM);
+    });
+  });
   const eatTotal = realTotal + proyTotal;
   const diff = eatTotal - metaTotal;
   const pct = metaTotal>0 ? (eatTotal/metaTotal*100) : (eatTotal>0 ? 100 : 0);
 
-  const genDateStr = (RAW.generated_at || '').slice(0,10);
-  const genDate = genDateStr ? new Date(genDateStr+'T00:00:00') : new Date();
-  const daysInMonth = new Date(y, mo, 0).getDate();
-  const dayOfMonth = (genDate.getFullYear()===y && genDate.getMonth()+1===mo) ? genDate.getDate() : daysInMonth;
-  const ritmoPct = dayOfMonth/daysInMonth*100;
+  // "Ritmo esperado a la fecha" sólo tiene sentido cuando el período seleccionado es exactamente
+  // el mes calendario en curso (un solo mes, y ese mes = hoy); en cualquier otro caso (mes
+  // cerrado o selección de varios meses) se omite.
+  let ritmoNote = '';
+  if(mesKeys.length===1 && mesKeys[0]===getCurrentMonthKey()){
+    const [yStr, moStr] = mesKeys[0].split('-');
+    const y = +yStr, mo = +moStr;
+    const genDateStr = (RAW.generated_at || '').slice(0,10);
+    const genDate = genDateStr ? new Date(genDateStr+'T00:00:00') : new Date();
+    const daysInMonth = new Date(y, mo, 0).getDate();
+    const dayOfMonth = genDate.getDate();
+    const ritmoPct = dayOfMonth/daysInMonth*100;
+    ritmoNote = ` · día ${dayOfMonth} de ${daysInMonth} del mes`;
+    document.getElementById('kpi-meta-pct-sub').textContent = `EAT / meta · ritmo esperado a la fecha: ${ritmoPct.toFixed(0)}%`;
+  } else {
+    document.getElementById('kpi-meta-pct-sub').textContent = 'EAT / meta';
+  }
 
-  labelEl.textContent = `${state.proyecto ? state.proyecto : 'Todos los proyectos (' + scope.length + ' con meta)'} · ${mesLabel} · día ${dayOfMonth} de ${daysInMonth} del mes`;
+  labelEl.textContent = `${state.proyecto ? state.proyecto : 'Todos los proyectos (' + scope.length + ' con meta)'} · ${metaPeriodLabel(mesKeys)}${ritmoNote}`;
 
   document.getElementById('kpi-meta-meta').textContent = fmtUF(metaTotal,1);
   document.getElementById('kpi-meta-real').textContent = fmtUF(realTotal,1);
@@ -715,7 +728,6 @@ function renderMetaKPIs(){
   const pctEl = document.getElementById('kpi-meta-pct');
   pctEl.textContent = fmtPct(pct);
   pctEl.style.color = pct>=100 ? 'var(--positive)' : 'var(--negative)';
-  document.getElementById('kpi-meta-pct-sub').textContent = `EAT / meta · ritmo esperado a la fecha: ${ritmoPct.toFixed(0)}%`;
   const diffEl = document.getElementById('kpi-meta-diff');
   diffEl.textContent = `${diff>=0?'+':''}${fmtUF(diff,1)}`;
   diffEl.style.color = diff>=0 ? 'var(--positive)' : 'var(--negative)';
@@ -726,36 +738,45 @@ function renderMetaKPIs(){
 // ingresos aún) y también los que tienen ingresos Conciliado este mes pero no tienen meta
 // definida en Metas.xlsx. No respeta el filtro de Proyecto (es una vista comparativa completa).
 function renderCumplimientoChart(){
-  const mk = metaMonthKey;
+  const mesKeys = selectedMetaMonthKeys();
   const noteEl = document.getElementById('cumplimiento-chart-note');
   const tbl = document.getElementById('tbl-cumplimiento');
-  if(!mk){
+  if(mesKeys.length===0){
     tbl.innerHTML = '';
+    noteEl.textContent = 'No hay metas definidas para el período seleccionado (Año/Mes).';
     return;
   }
-  const [yStr, moStr] = mk.split('-');
-  const y = +yStr, mo = +moStr;
-  const mesLabel = `${MESES[mo]}-${String(y).slice(2)}`;
+  const mesKeySet = new Set(mesKeys);
 
-  const realByP = {};
+  const realByPM = {};
   TX.forEach(t=>{
-    if(t.es==='Conciliado' && t.y===y && t.mo===mo){
-      realByP[t.p] = (realByP[t.p]||0) + (t.v||0);
-    }
+    if(t.es!=='Conciliado') return;
+    const mk = `${t.y}-${String(t.mo).padStart(2,'0')}`;
+    if(!mesKeySet.has(mk)) return;
+    const key = t.p+'|'+mk;
+    realByPM[key] = (realByPM[key]||0) + (t.v||0);
   });
-  const proyectosConMeta = Object.keys(METAS).filter(p => METAS[p] && METAS[p][mk] !== undefined);
-  const proyectos = [...new Set([...proyectosConMeta, ...Object.keys(realByP)])];
+  const proyectosConMeta = new Set();
+  mesKeys.forEach(mk=> Object.keys(METAS).forEach(p=>{ if(METAS[p] && METAS[p][mk]!==undefined) proyectosConMeta.add(p); }));
+  const proyectosConReal = new Set(Object.keys(realByPM).map(k=>k.split('|')[0]));
+  const proyectos = [...new Set([...proyectosConMeta, ...proyectosConReal])];
 
   const entries = proyectos.map(p=>{
-    const meta = (METAS[p] && METAS[p][mk]!==undefined) ? METAS[p][mk] : null;
-    const real = realByP[p] || 0;
-    // Proyección = max(0, EAT objetivo fijo - Real); nunca negativa (si el Real ya superó el
-    // objetivo, la Proyección queda en 0 y el EAT final = Real).
-    const target = (PROYECCIONES[p] && PROYECCIONES[p][mk]) || 0;
-    const proy = Math.max(0, target - real);
-    const eat = real + proy;
+    let metaSum=0, hasMeta=false, realSum=0, proySum=0;
+    mesKeys.forEach(mk=>{
+      const m = (METAS[p] && METAS[p][mk]!==undefined) ? METAS[p][mk] : undefined;
+      if(m!==undefined){ hasMeta=true; metaSum += m; }
+      const realPM = realByPM[p+'|'+mk] || 0;
+      realSum += realPM;
+      // Proyección = max(0, EAT objetivo fijo - Real de ese mes); nunca negativa (si el Real ya
+      // superó el objetivo ese mes, la Proyección de ese mes queda en 0).
+      const target = (PROYECCIONES[p] && PROYECCIONES[p][mk]) || 0;
+      proySum += Math.max(0, target - realPM);
+    });
+    const meta = hasMeta ? metaSum : null;
+    const eat = realSum + proySum;
     const pct = meta===null ? null : (meta>0 ? (eat/meta*100) : (eat>0?100:0));
-    return {p, meta, real, proy, eat, pct};
+    return {p, meta, real: realSum, proy: proySum, eat, pct};
   }).sort((a,b)=>{
     // ordenado por presupuesto (meta) de mayor a menor; los sin meta definida van al final
     if((a.meta===null) !== (b.meta===null)) return a.meta===null ? 1 : -1;
@@ -763,7 +784,7 @@ function renderCumplimientoChart(){
     return b.meta - a.meta;
   });
 
-  noteEl.textContent = `Meta vs. EAT (Esperado a Término = Real + Proyección) de ${mesLabel} · ${entries.length} proyectos: los sin meta definida también aparecen`;
+  noteEl.textContent = `Meta vs. EAT (Esperado a Término = Real + Proyección) de ${metaPeriodLabel(mesKeys)} · ${entries.length} proyectos: los sin meta definida también aparecen`;
 
   let html = `<thead><tr><th>Proyecto</th><th class="num">Presupuesto (UF)</th><th class="num">Real a la fecha (UF)</th><th class="num">Proyección (mes) (UF)</th><th class="num">EAT (UF)</th><th class="num">% Cumplimiento</th></tr></thead><tbody>`;
   entries.forEach(e=>{
@@ -1458,7 +1479,6 @@ function changePage(kind, delta){
 
 // ---------- Init ----------
 initCharts();
-initMetaMonthSelect();
 applyFilters();
 </script>
 </body>
