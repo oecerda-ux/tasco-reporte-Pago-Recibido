@@ -76,6 +76,9 @@ table.data-table{width:100%;border-collapse:collapse;font-size:12.5px;}
 .data-table thead th{position:sticky;top:0;background:#f8f9fb;text-align:left;padding:9px 10px;border-bottom:2px solid var(--border);color:var(--text-secondary);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap;cursor:pointer;user-select:none;}
 .data-table thead th.num{text-align:right;}
 .data-table thead th:hover{color:var(--text-primary);}
+.flujo-anual-table th:first-child, .flujo-anual-table td:first-child{position:sticky;left:0;background:#fff;z-index:1;box-shadow:1px 0 0 var(--border);}
+.flujo-anual-table thead th:first-child{background:#f8f9fb;z-index:2;}
+.flujo-anual-table tfoot td:first-child{background:#f8f9fb;}
 .data-table tbody td{padding:8px 10px;border-bottom:1px solid #f1f2f5;white-space:nowrap;}
 .data-table tbody tr:hover{background:#f8f9fb;}
 .data-table tbody tr.expandable{cursor:pointer;}
@@ -321,6 +324,18 @@ table.mensual-drill td.lvl2{padding-left:44px;color:var(--text-secondary);}
     </div>
   </section>
 
+  <div class="chart-container" style="margin-top:var(--gap);">
+    <div class="chart-head-row">
+      <h3>Flujo Mensual de Ingresos por Proyecto</h3>
+      <div class="fgroup">
+        <label>Año</label>
+        <div class="chipset" id="f-flujo-anual-years"></div>
+      </div>
+    </div>
+    <div class="chart-note" id="flujo-anual-note">Monto cobrado (Conciliado) por mes y proyecto</div>
+    <div class="hscroll"><table class="data-table flujo-anual-table" id="tbl-flujo-anual"></table></div>
+  </div>
+
   <footer class="foot">Reporte generado automáticamente a partir de "Todos los pagos.xlsx" (pagos, filtrados por Estado = Conciliado por defecto) y "AO.xlsx" (venta total por negocio, cruce Proyecto:Negocio + Cliente). Para actualizar, re-ejecutar el script generador con los archivos Excel actualizados.</footer>
 </div>
 
@@ -440,6 +455,81 @@ function buildChips(containerId, values, activeSet, multi, onChange, labelFn){
     };
     el.appendChild(c);
   });
+}
+
+// ---------- Flujo Mensual de Ingresos por Proyecto (tabla al final del reporte) ----------
+// Pivot proyecto x mes, siempre Estado=Conciliado, independiente de los demás filtros del
+// reporte (Año/Mes/Proyecto/Estado de arriba). Botonera "Año" propia (multi-select, "Todos"
+// muestra el histórico completo desde el inicio de los datos). Por defecto se selecciona sólo
+// el año más reciente con datos, para que la tabla no nazca con ~10 años de columnas.
+let flujoAnualYears = new Set();
+
+function updateFlujoAnual(){
+  const years = [...new Set(TX.filter(t=>t.es==='Conciliado' && t.y).map(t=>t.y))].sort();
+  buildChips('f-flujo-anual-years', years, flujoAnualYears, true, updateFlujoAnual);
+  renderFlujoAnual();
+}
+
+function renderFlujoAnual(){
+  const tbl = document.getElementById('tbl-flujo-anual');
+  const noteEl = document.getElementById('flujo-anual-note');
+
+  const monthSet = new Set();
+  TX.forEach(t=>{
+    if(t.es!=='Conciliado' || !t.y) return;
+    if(flujoAnualYears.size && !flujoAnualYears.has(t.y)) return;
+    monthSet.add(`${t.y}-${String(t.mo).padStart(2,'0')}`);
+  });
+  const months = [...monthSet].sort();
+
+  if(months.length===0){
+    tbl.innerHTML = '';
+    noteEl.textContent = 'Sin pagos Conciliado para el período seleccionado.';
+    return;
+  }
+
+  const byPM = {}, totalsByMonth = {}, totalsByProject = {};
+  let grandTotal = 0;
+  TX.forEach(t=>{
+    if(t.es!=='Conciliado' || !t.y) return;
+    const mk = `${t.y}-${String(t.mo).padStart(2,'0')}`;
+    if(!monthSet.has(mk)) return;
+    byPM[t.p] = byPM[t.p] || {};
+    byPM[t.p][mk] = (byPM[t.p][mk]||0) + (t.v||0);
+    totalsByMonth[mk] = (totalsByMonth[mk]||0) + (t.v||0);
+    totalsByProject[t.p] = (totalsByProject[t.p]||0) + (t.v||0);
+    grandTotal += (t.v||0);
+  });
+  const proyectos = Object.keys(byPM).sort();
+
+  const yearsLabel = flujoAnualYears.size ? [...flujoAnualYears].sort().join(', ') : `todos (${months[0].slice(0,4)}–${months[months.length-1].slice(0,4)})`;
+  noteEl.textContent = `Monto cobrado (Conciliado) por mes y proyecto · ${months.length} ${months.length===1?'mes':'meses'} · año(s): ${yearsLabel}`;
+
+  let html = '<thead><tr><th>Proyecto</th>';
+  months.forEach(mk=>{
+    const [y, mo] = mk.split('-');
+    html += `<th class="num">${MESES[+mo]}-${y.slice(2)}</th>`;
+  });
+  html += '<th class="num">Total</th></tr></thead><tbody>';
+  proyectos.forEach(p=>{
+    html += `<tr><td><b>${p}</b></td>`;
+    months.forEach(mk=>{
+      const v = (byPM[p] && byPM[p][mk]) || 0;
+      html += `<td class="num">${v ? fmtUF(v,0) : '—'}</td>`;
+    });
+    html += `<td class="num"><b>${fmtUF(totalsByProject[p]||0,0)}</b></td></tr>`;
+  });
+  html += '</tbody><tfoot><tr style="font-weight:700;background:#f8f9fb;"><td>TOTAL</td>';
+  months.forEach(mk=>{ html += `<td class="num">${fmtUF(totalsByMonth[mk]||0,0)}</td>`; });
+  html += `<td class="num">${fmtUF(grandTotal,0)}</td></tr></tfoot>`;
+
+  tbl.innerHTML = html;
+}
+
+function initFlujoAnual(){
+  const years = [...new Set(TX.filter(t=>t.es==='Conciliado' && t.y).map(t=>t.y))].sort();
+  if(years.length) flujoAnualYears.add(years[years.length-1]);
+  updateFlujoAnual();
 }
 
 function refreshChips(){
@@ -1480,6 +1570,7 @@ function changePage(kind, delta){
 // ---------- Init ----------
 initCharts();
 applyFilters();
+initFlujoAnual();
 </script>
 </body>
 </html>
